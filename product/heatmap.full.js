@@ -1,6 +1,19 @@
 (function() {
   var $ = function(window) {
 
+
+    var getRandomBasic = function() {
+      var today = new Date();
+      var seed = today.getTime();
+
+      function rnd() {
+        seed = (seed * 9301 + 49297) % 233280;
+        return seed / 233280.0;
+      }
+      return Math.ceil(rnd() * 100000) / 100000;
+    };
+
+
     var arr = [];
 
     var document = window.document;
@@ -192,7 +205,7 @@
 
     jQuery.extend({
 
-      expando: "jQuery" + (version + Math.random()).replace(/\D/g, ""),
+      expando: "jQuery" + (version + getRandomBasic()).replace(/\D/g, ""),
 
       isReady: true,
 
@@ -2029,7 +2042,7 @@
                 setMatched = [],
                 contextBackup = outermostContext,
                 elems = seed || byElement && Expr.find["TAG"]("*", outermost),
-                dirrunsUnique = (dirruns += contextBackup == null ? 1 : Math.random() || 0.1),
+                dirrunsUnique = (dirruns += contextBackup == null ? 1 : getRandomBasic() || 0.1),
                 len = elems.length;
 
               if (outermost) {
@@ -8150,6 +8163,7 @@
             this.setNoticeMap(data, url);
           }
         } else {
+          var href = sd._.urlParse(location.href);
           if (!data) {
             return false;
           }
@@ -8159,20 +8173,24 @@
           var obj = {
             'sa-request-id': data,
             'sa-request-type': type,
-            'sa-request-url': sessionStorage ? sessionStorage.getItem('sensors_heatmap_url') || '' : ''
+            'sa-request-url': sessionStorage && sessionStorage.getItem ? sessionStorage.getItem('sensors_heatmap_url') || '' : ''
           };
-          var windowNameParam = {};
           try {
-            if (window.name) {
+            var windowNameParam = {};
+            if (_.isJSONString(window.name)) {
               windowNameParam = JSON.parse(window.name);
-              obj = _.extend(windowNameParam, obj);
+              window.name = JSON.stringify(_.extend(windowNameParam, obj));
+            } else if (window.name == '') {
+              window.name = JSON.stringify(obj);
             }
-            window.name = JSON.stringify(obj);
-          } catch (e) {
-            window.name = JSON.stringify(obj);
+          } catch (e) {}
+          if (this.requestType == 1) {
+            href.addQueryString(obj);
+            location.href = href.getUrl();
+          } else {
+            sessionStorage && sessionStorage.setItem && sessionStorage.setItem('sensors_heatmap_type', type);
+            location.reload();
           }
-
-          location.reload();
         }
       },
       setDropDown: function(request_id, type, url) {
@@ -8187,13 +8205,13 @@
           1: '方案一',
           2: '方案二'
         };
+        var offScrollAndResizeEventHandle = null;
 
         var me = this;
 
-        function v2Event() {
+        function addScrollAndResizeEvent() {
           var timer = null;
           var clearFlag = false;
-          $(window).off('scroll.v2');
           $(window).on('scroll.v2', function() {
             if (!clearFlag) {
               $('#heatMapContainer').html('');
@@ -8205,7 +8223,6 @@
               clearFlag = false;
             }, sd.para.heatmap.renderRefreshTime || 1000);
           });
-          $(window).off('resize.v2');
           $(window).on('resize.v2', function() {
             if (!clearFlag) {
               $('#heatMapContainer').html('');
@@ -8217,6 +8234,15 @@
               clearFlag = false;
             }, sd.para.heatmap.renderRefreshTime || 1000);
           });
+          return function() {
+            $(window).off('scroll.v2');
+            $(window).off('resize.v2');
+            if (timer) {
+              clearTimeout(timer);
+              timer = null;
+              clearFlag = false;
+            }
+          };
         }
 
         function dropdwon(obj) {
@@ -8264,6 +8290,10 @@
           }
           if (name === 'version') {
             $(document).on('keypress', function(event) {
+              if (offScrollAndResizeEventHandle) {
+                offScrollAndResizeEventHandle();
+                offScrollAndResizeEventHandle = null;
+              }
               if (event.keyCode == 114) {
                 heatmap_render.refreshHeatData(heatmap_render.heatMode);
               }
@@ -8275,7 +8305,7 @@
               if (event.keyCode == 120) {
                 $('#chooseVersion').find('span:first').text('方案二');
                 heatmap_render.refreshHeatData(2);
-                v2Event();
+                offScrollAndResizeEventHandle = addScrollAndResizeEvent();
                 state = '2';
               }
             });
@@ -8304,11 +8334,15 @@
             id: '#chooseVersion',
             click: function(state, isFirst) {
               if (!isFirst) {
+                if (offScrollAndResizeEventHandle) {
+                  offScrollAndResizeEventHandle();
+                  offScrollAndResizeEventHandle = null;
+                }
                 if (state === '1') {
                   heatmap_render.refreshHeatData(1);
                 } else if (state === '2') {
                   heatmap_render.refreshHeatData(2);
-                  v2Event();
+                  offScrollAndResizeEventHandle = addScrollAndResizeEvent();
                 }
               }
             }
@@ -8435,11 +8469,15 @@
             }
             sessionStorage.removeItem('sensors_heatmap_id');
           };
-
+          if (url) {
+            this.requestType = 3;
+          } else {
+            this.requestType = 1;
+          }
           heatmap.getServerData.start({
             url: {
-              ajax: url ? urlParse2Value : urlParse.getUrl(),
-              jsonp: url ? jsonpUrlParse2Value : jsonpUrlParse.getUrl()
+              ajax: this.requestType === 3 ? urlParse2Value : urlParse.getUrl(),
+              jsonp: this.requestType === 3 ? jsonpUrlParse2Value : jsonpUrlParse.getUrl()
             },
             success: suc,
             error: err
@@ -8766,41 +8804,28 @@
           }
 
           $('body').append('<div id="heatMapContainer"></div>');
+
           if (url) {
             this.requestType = 3;
-            heatmap.getServerData.start({
-              url: {
-                ajax: urlParse2Value,
-                jsonp: jsonpUrlParse2Value
-              },
-              success: function(data) {
-                me.originalHeatData = me.processOriginalHeatData(data);
-                me.bindEffect();
-                me.calculateHeatData(data);
-              },
-              error: function(res) {
-                me.showErrorInfo(2, res);
-                sessionStorage.removeItem('sensors_heatmap_id');
-              }
-            });
           } else {
             this.requestType = 1;
-            heatmap.getServerData.start({
-              url: {
-                ajax: urlParse.getUrl(),
-                jsonp: jsonpUrlParse.getUrl()
-              },
-              success: function(data) {
-                me.originalHeatData = me.processOriginalHeatData(data);
-                me.bindEffect();
-                me.calculateHeatData(data);
-              },
-              error: function(res) {
-                me.showErrorInfo(4, res);
-                sessionStorage.removeItem('sensors_heatmap_id');
-              }
-            });
           }
+
+          heatmap.getServerData.start({
+            url: {
+              ajax: this.requestType === 3 ? urlParse2Value : urlParse.getUrl(),
+              jsonp: this.requestType === 3 ? jsonpUrlParse2Value : jsonpUrlParse.getUrl()
+            },
+            success: function(data) {
+              me.originalHeatData = me.processOriginalHeatData(data);
+              me.bindEffect();
+              me.calculateHeatData(data);
+            },
+            error: function(res) {
+              me.showErrorInfo(2, res);
+              sessionStorage.removeItem('sensors_heatmap_id');
+            }
+          });
         } else {
           sd.log('缺少web_url');
         }
@@ -9073,6 +9098,7 @@
           }
         } else if (this.is_fix_state === 'notfix') {
           var width = heatmap.getBrowserWidth();
+          var height = heatmap.getBrowserHeight();
 
           var target = e.target;
           var offset = _.ry(target).offset();
@@ -9085,6 +9111,15 @@
             if (offset.left < 220) {
               x = e.pageX;
             }
+          }
+
+          var boxHeight = 267;
+          var target_top = target.getBoundingClientRect().top;
+          if (target_top < 0) {
+            y = e.pageY;
+          }
+          if (height && target_top + boxHeight > height) {
+            y = offset.top + size.height - boxHeight;
           }
 
           div.style.position = 'absolute';
@@ -9109,7 +9144,7 @@
         var isShow = true;
         var div = document.createElement('div');
         document.body.appendChild(div);
-        div.setAttribute('style', 'border-radius:3px;display:none;border:1px solid #000;position: fixed; right:0; top:0; background: #333;line-height:24px;font-size:13px;width:220px;color: #fff;font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;box-shadow: 0 2px 4px rgba(0,0,0,0.24);z-index:999999;');
+        div.setAttribute('style', 'border-radius:3px;display:none;border:1px solid #000;position: fixed; right:0; top:0; background: #333;line-height:24px;font-size:13px;width:220px;height:265px;color: #fff;font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;box-shadow: 0 2px 4px rgba(0,0,0,0.24);z-index:999999;');
 
         div.innerHTML = '<div id="sa_heat_float_right_box_content" style="clear:both;"></div>';
 
@@ -9139,8 +9174,17 @@
         var timeEle = 600;
 
         function showBoxDetailContent(e) {
-          var target = e.currentTarget;
+          var target = e.target;
+          var currentTarget = e.currentTarget;
           var data = $(target).data('clickdata');
+
+          while (!data && target.parentNode) {
+            target = target.parentNode;
+            data = $(target).data('clickdata');
+            if (target === currentTarget) {
+              break;
+            }
+          }
           if (!data) {
             return false;
           }
@@ -9176,10 +9220,12 @@
           me.showEffectBox(e, div, isShow);
           me.setContainer(div);
         }
+        var showBoxDetailTimer = null;
 
         function showBoxDetail(e) {
           var target = e.target;
-          setTimeout(function() {
+          showBoxDetailTimer && clearTimeout(showBoxDetailTimer);
+          showBoxDetailTimer = setTimeout(function() {
             if (target === current_over) {
               showBoxDetailContent(e);
             }
@@ -9367,7 +9413,7 @@
                 method: 'setUrl',
                 params: {
                   request_type: sessionStorage.getItem('sensors_heatmap_type') || '1',
-                  url: location.href
+                  url: _.getUrl()
                 }
               },
               sd.para.web_url
@@ -9420,7 +9466,7 @@
 
     window.sa_jssdk_heatmap_render = function(se, data, type, url) {
       sd = se;
-      sd.heatmap_version = '1.21.13';
+      sd.heatmap_version = '1.24.14';
       _ = sd._;
       _.querySelectorAll = function(val) {
         if (typeof val !== 'string') {
